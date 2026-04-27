@@ -1,30 +1,35 @@
-import http from "http";
-import net from "net";
-import url from "url";
+import { createServer } from "http";
+import { WebSocketServer, WebSocket } from "ws";
 
-// این پراکسی WebSocket درخواست را به سرور واقعی‌ت هدایت می‌کند (91.107.251.214)
 const serverIp = "91.107.251.214";
 const serverPort = 443;
+const serverPath = "/"; // همان path که در inbound تعریف کردی
 
-export default function handler(req, res) {
-  // بررسی اینکه درخواست از نوع WebSocket هست یا نه
-  if (req.headers.upgrade && req.headers.upgrade.toLowerCase() === "websocket") {
-    const { socket } = res;
-    const { pathname } = url.parse(req.url);
-    console.log("WS connection:", pathname);
+const wss = new WebSocketServer({ noServer: true });
 
-    // اتصال به سرور Xray
-    const client = net.connect(serverPort, serverIp, () => {
-      socket.pipe(client);
-      client.pipe(socket);
-    });
+wss.on("connection", (ws, request) => {
+  const target = `ws://${serverIp}:${serverPort}${serverPath}`;
+  const tunnel = new WebSocket(target, {
+    rejectUnauthorized: false // برای تست
+  });
 
-    client.on("error", (e) => {
-      console.error("Error connecting to server:", e.message);
-      socket.destroy();
+  tunnel.on("open", () => {
+    ws.on("message", msg => tunnel.send(msg));
+    tunnel.on("message", msg => ws.send(msg));
+  });
+
+  tunnel.on("error", e => ws.close());
+  ws.on("error", () => tunnel.close());
+});
+
+createServer((req, res) => {
+  if (req.headers.upgrade?.toLowerCase() === "websocket") {
+    wss.handleUpgrade(req, req.socket, Buffer.alloc(0), ws => {
+      wss.emit("connection", ws, req);
     });
   } else {
-    res.statusCode = 200;
-    res.end("VLESS WS proxy active on Vercel.");
+    res.writeHead(200);
+    res.end("VLESS WS proxy active on Vercel (WebSocket version).");
   }
-}
+}).listen();
+
